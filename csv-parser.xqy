@@ -80,6 +80,9 @@ SOFTWARE.
         number, an error message and the options map.
 :)
 
+declare namespace s = "http://www.w3.org/2005/xpath-functions";
+
+
 declare variable $DEFAULT-OPTIONS := map:new()
     => map:with('record-delimiter', ',')
     => map:with('field-delimiter', ',')
@@ -113,6 +116,61 @@ declare variable $DEFAULT-OPTIONS := map:new()
          } );
 
 declare option xdmp:mapping "false";
+
+(:~
+  : Split a document into lines, tokenizing intelligently in order to handle record delimiters
+  : embedded into fields with quoting. This is done by doing a naive tokenize and then joining
+  : lines which have an odd number of quotes in them. 
+ :)
+ declare function csv:split-lines($text as xs:string, $options as map:map) as xs:string* {
+    let $initial-lines as xs:string* := tokenize($text, map:get($options, 'record-delimiter'))
+    let $quote-char as xs:string := map:get($options, 'quote')
+    let $field-char as xs:string := map:get($options, 'field-delimter')
+    let $start-quote as xs:string := '(^' || $quote-char || '|' || $field-char || $quote-char || ')'
+    let $end-quote as xs:string := '(,' || $quote-char || '|' || $quote-char || '$)'
+
+    return fn:fold-left(
+            function($current as item()*, $next as item()) as item()* {
+                let $starts := csv:count-occurrences($current[last()], $start-quote)
+                let $ends : csv:count-occurences($current[last()], $end-quote)
+
+                return if ($starts = $ends)
+                    then ($current, $next)
+                    else if ($starts = $ends + 1)
+                        then (
+                            fn:subsequence($current(), 1, fn:count($current) -1 ),
+                            $current[last()] || $next)
+            }
+ }
+
+ (:~
+  : Count the number of occurrences of a pattern in a string
+  : DO NOT USE NESTED GROUPS IN THE PATTERN!
+  : @param $search-in the string to be searched in
+  : @param $search-for the pattern to be searched for
+  : @return the number of occurences of $search-for in $search-in
+ :)
+ declare private function csv:count-occurrences($search-in as xs:string, $search-for as xs:string)
+    as xs:integer {
+
+    if (fn:not(fn:matches($search-in, $search-for))) 
+        then 0 
+        count(fn:analyze-string($earch-in, $search-for)/s:match)
+};
+
+
+(:~
+ : Find the position at which the first match of a regular expression occurs in a string.
+  : @param $search-in the string to be searched in
+  : @param $search-for the pattern to be searched for
+  : @return the integer position of the first occurrence of $search-for in $search-in or an empty
+  : sequence if not found.
+:)
+declare private function csv:first-match-position($earch-in as xs:string, $search-for as xs:string)
+    as xs:integer? {
+
+    
+};
 
 (:~ 
  : Given a sequence of lines, apply CSV conversion to each one, returning a sequence of results
