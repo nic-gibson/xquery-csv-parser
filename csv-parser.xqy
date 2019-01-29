@@ -1,5 +1,7 @@
 xquery version "1.0-ml";
 
+module namespace delims = "http://corbas.co.uk/ns/delimited-text-parser";
+
 (:~
 MIT License
 
@@ -20,7 +22,7 @@ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 SOFTWARE.
 :)
 
@@ -42,6 +44,9 @@ SOFTWARE.
         This character is used to replace doubled quotes within fields
         (e.g. abc,d "quoted" e, fgh ). Only replace it if the input data may 
         contain '!!!q!!!'.
+    dequote-fields
+        If true() (the default) remove leading and trailing quotes from fields
+        before returning.
     record-element
         The name of an element to be used to wrap a single record on output
         (see the post-parse function below)
@@ -90,6 +95,7 @@ declare variable $DEFAULT-OPTIONS := map:new()
     => map:with('quote-escape',  '!!!q!!!')
     => map:with('record-element', 'record')
     => map:with('field-element', 'field')
+    => map:with('dequote-fields', true())
     => map:with('line-filter', function($line as xs:string, $options as map:map) as xs:string? {$line})
     => map:with('field-filter', function($field as xs:string, $options as map:map) as xs:string {$field})
     => map:with('internal-quote-escape',
@@ -112,7 +118,7 @@ declare variable $DEFAULT-OPTIONS := map:new()
         })
     => map:with('report-error',
         function($line as xs:string?, $line-no as xs:integer?, $message as xs:string, $options as map:map?) {
-            fn:error((), 'CSV:ERROR', ($message, $line, $line-no))
+            fn:error((), 'DELIMS:ERROR', ($message, $line, $line-no))
          } );
 
 declare option xdmp:mapping "false";
@@ -122,26 +128,29 @@ declare option xdmp:mapping "false";
   : embedded into fields with quoting. This is done by doing a naive tokenize and then joining
   : lines which have an odd number of quotes in them. 
  :)
- declare function csv:split-lines($text as xs:string, $options as map:map) as xs:string* {
-    let $initial-lines as xs:string* := tokenize($text, map:get($options, 'record-delimiter'))
-    let $quote-char as xs:string := map:get($options, 'quote')
-    let $field-char as xs:string := map:get($options, 'field-delimter')
-    let $start-quote as xs:string := '(^' || $quote-char || '|' || $field-char || $quote-char || ')'
-    let $end-quote as xs:string := '(,' || $quote-char || '|' || $quote-char || '$)'
+ declare function delims:split-lines($text as xs:string, $options as map:map) as xs:string* {
+    let $quote-str as xs:string := map:get($options, 'quote')
+    let $field-str as xs:string := map:get($options, 'field-delimiter')
+    let $record-str as xs:string := map:get($options, 'record-delimiter')
+    let $start-quote as xs:string := '(^' || $quote-str || '|' || $field-str || $quote-str || ')'
+    let $end-quote as xs:string := '(' || $quote-str || $field-str || '|' || $quote-str || '$)'
+    let $initial-lines as xs:string* := fn:map(map:get($options, '!internal-quote-escape'), tokenize($text, $record-str))
 
-    return fn:fold-left(
+    return fn:map(map:get($options, '!internal-quote-unescape'), fn:fold-left(
             function($current as item()*, $next as item()) as item()* {
-                let $starts := csv:count-occurrences($current[last()], $start-quote)
-                let $ends : csv:count-occurences($current[last()], $end-quote)
+                let $starts := delims:count-occurrences($current[last()], $start-quote)
+                let $ends := delims:count-occurrences($current[last()], $end-quote)
 
                 return if ($starts = $ends)
                     then ($current, $next)
                     else if ($starts = $ends + 1)
                         then (
-                            fn:subsequence($current(), 1, fn:count($current) -1 ),
-                            $current[last()] || $next)
-            }
- }
+                            fn:subsequence($current, 1, fn:count($current) -1 ),
+                            $current[last()] || $record-str || $next)
+                        else fn:error('WTF')
+            }, (), $initial-lines))
+ };
+
 
  (:~
   : Count the number of occurrences of a pattern in a string
@@ -150,40 +159,25 @@ declare option xdmp:mapping "false";
   : @param $search-for the pattern to be searched for
   : @return the number of occurences of $search-for in $search-in
  :)
- declare private function csv:count-occurrences($search-in as xs:string, $search-for as xs:string)
+ declare private function local:count-occurrences($search-in as xs:string*, $search-for as xs:string)
     as xs:integer {
 
     if (fn:not(fn:matches($search-in, $search-for))) 
-        then 0 
-        count(fn:analyze-string($earch-in, $search-for)/s:match)
-};
-
-
-(:~
- : Find the position at which the first match of a regular expression occurs in a string.
-  : @param $search-in the string to be searched in
-  : @param $search-for the pattern to be searched for
-  : @return the integer position of the first occurrence of $search-for in $search-in or an empty
-  : sequence if not found.
-:)
-declare private function csv:first-match-position($earch-in as xs:string, $search-for as xs:string)
-    as xs:integer? {
-
-    
+        then 0   
+        else fn:count(fn:analyze-string($search-in, $search-for)/s:match)
 };
 
 (:~ 
- : Given a sequence of lines, apply CSV conversion to each one, returning a sequence of results
+ : Given a sequence of lines, apply field conversion to each one, returning a sequence of results
  : (by default, record elements containing field elements)
  : @param $lines the sequence of lines
  : @param $options the options map
  : @return a sequence of results (generated through map:get($options, 'post-parse'))
  :)
-declare function csv:parse-sequence($lines as xs:string*, $options as map:map) as item()* {
-    let $working-options := csv:working-options($options)
+declare function delims:parse-sequence($lines as xs:string*, $options as map:map) as item()* {
     let $post-parse as function(xs:string*, map:map) as item()* := map:get($working-options, 'post-parse')
     return for $line at $pos in $lines
-      let $parsed as xs:string* := csv:parse-line($line, $pos,  $working-options)
+      let $parsed as xs:string* := delims:parse-line($line, $pos,  $working-options)
       return $post-parse($parsed, $working-options)
 };
 
@@ -206,11 +200,11 @@ declare function csv:parse-sequence($lines as xs:string*, $options as map:map) a
 : @param $user-options A map of user options
 : @return A map of working options.
 :)
-declare function csv:working-options($user-options as map:map) as map:map {
+declare function delims:working-options($user-options as map:map) as map:map {
     let $working-options := map:new(($DEFAULT-OPTIONS, $user-options))
     let $calculated-options := map:map() 
-        => map:with('!field-element', csv:element-qname('field', $working-options))
-        => map:with('!record-element', csv:element-qname('record', $working-options))
+        => map:with('!field-element', delims:element-qname('field', $working-options))
+        => map:with('!record-element', delims:element-qname('record', $working-options))
         => map:with('!dl',  string-length(map:get($working-options, 'field-delimiter')) + 1)
         => map:with('!ql', string-length(map:get($working-options, 'quote')) * 2 + 
             string-length(map:get($working-options, 'field-delimiter')) + 1)
@@ -218,6 +212,13 @@ declare function csv:working-options($user-options as map:map) as map:map {
         => map:with('!field-filter', map:get($working-options, 'field-filter')(?, $working-options))
         => map:with('!internal-quote-unescape', map:get($working-options, 'internal-quote-unescape')(?, $working-options))
         => map:with('!internal-quote-escape', map:get($working-options, 'internal-quote-escape')(?, $working-options))
+        => map;with('!dequote-field', if (map:get($working-options, 'dequote-fields')) 
+            then function($str as xs:string) as xs:string {
+                let $s1 :=  if (fn:starts-with($str, map:get($options, 'quote'))) then fn:substring($str, 2) else $str
+                return if (fn:ends-with($s1, map:get($options, 'quote'))) then fn:substring($s1, 1, fn:string-length($s1) -1 ) else $s1            
+            }
+
+            else function($str as xs:string) as xs:string { $str }
 
     (: merge these such that user settings will override calculated just in case :)
     return map:new(($working-options, $calculated-options))
@@ -230,7 +231,7 @@ declare function csv:working-options($user-options as map:map) as map:map {
  : @param $options - options map to be passed to error handler if required
  : @return QName for field name
 :)
-declare private function csv:element-qname($name as xs:string, $options as map:map) as xs:QName {
+declare private function delims:element-qname($name as xs:string, $options as map:map) as xs:QName {
     try {
         xs:QName(map:get($options, $name || '-element'))
     } catch ($e) {
@@ -239,20 +240,21 @@ declare private function csv:element-qname($name as xs:string, $options as map:m
     }
 };
 
-declare private function csv:parse-line($line as xs:string, $line-no as xs:integer, $options as map:map) as xs:string* {
+declare private function delims:parse-line($line as xs:string, $line-no as xs:integer, $options as map:map) as xs:string* {
     let $filtered as xs:string? := map:get($options, '!line-filter')($line)
     return if (fn:not(fn:contains($line, map:get($options, 'field-delimiter')))) 
       then map:get($options, 'report-error')($line, $line-no, 'No field delimiter found in this line', $options)
         else if (exists($filtered))
-          then csv:parse-line-recurse(
+          then delims:parse-line-recurse(
               map:get($options, '!internal-quote-escape')($filtered), 
               $options) 
               ! map:get($options, '!internal-quote-unescape')(.) 
               ! map:get($options, '!field-filter')(.)
+              ! map:get($options, '!dequote-field')(.)
           else ()
 };
 
-declare private function csv:parse-line-recurse($line as xs:string, $options as map:map) as xs:string* {
+declare private function delims:parse-line-recurse($line as xs:string, $options as map:map) as xs:string* {
     
     let $d := map:get($options, 'field-delimiter')
     let $q := map:get($options, 'quote')
@@ -266,11 +268,11 @@ declare private function csv:parse-line-recurse($line as xs:string, $options as 
         then 
             let $first-field := substring-before(substring-after($line, $q), $q)
             let $remainder := substring($line, string-length($first-field) + map:get($options, '!ql'))
-            return ($first-field, csv:parse-line-recurse($remainder, $options))
+            return ($first-field, delims:parse-line-recurse($remainder, $options))
         
         (: there is a quote somewhere but it's not first :)                    
         else 
             let $first-field := substring-before($line, $d)
             let $remainder := substring($line, string-length($first-field) + map:get($options, '!dl'))
-            return ($first-field, csv:parse-line-recurse($remainder, $options))
+            return ($first-field, delims:parse-line-recurse($remainder, $options))
  };
