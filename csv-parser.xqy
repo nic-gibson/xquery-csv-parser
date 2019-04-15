@@ -1,5 +1,7 @@
 xquery version "1.0-ml";
 
+module namespace csv = "http://corbas.co.uk/ns/csv-parser";
+
 (:~
 MIT License
 
@@ -91,13 +93,13 @@ declare variable $DEFAULT-OPTIONS := map:new()
     => map:with('field-filter', function($field as xs:string, $options as map:map) as xs:string {$field})
     => map:with('internal-quote-escape',
         function($line as xs:string, $options as map:map) as xs:string {
-            replace($line, 
+            fn:replace($line, 
               map:get($options, 'quote') || map:get($options, 'quote'), 
               map:get($options, 'quote-escape'))
         })
     => map:with('internal-quote-unescape',
         function($line as xs:string, $options as map:map) as xs:string {
-            replace($line, map:get($options, 'quote-escape'), map:get($options, 'quote'))
+            fn:replace($line, map:get($options, 'quote-escape'), map:get($options, 'quote'))
         })
     => map:with('post-parse',
         function($line as xs:string*, $options as map:map) as item()* {
@@ -153,9 +155,9 @@ declare function csv:working-options($user-options as map:map) as map:map {
     let $calculated-options := map:map() 
         => map:with('!field-element', csv:element-qname('field', $working-options))
         => map:with('!record-element', csv:element-qname('record', $working-options))
-        => map:with('!dl',  string-length(map:get($working-options, 'field-delimiter')) + 1)
-        => map:with('!ql', string-length(map:get($working-options, 'quote')) * 2 + 
-            string-length(map:get($working-options, 'field-delimiter')) + 1)
+        => map:with('!dl',  fn:string-length(map:get($working-options, 'field-delimiter')) + 1)
+        => map:with('!ql', fn:string-length(map:get($working-options, 'quote')) * 2 + 
+            fn:string-length(map:get($working-options, 'field-delimiter')) + 1)
         => map:with('!line-filter', map:get($working-options, 'line-filter')(?, $working-options))
         => map:with('!field-filter', map:get($working-options, 'field-filter')(?, $working-options))
         => map:with('!internal-quote-unescape', map:get($working-options, 'internal-quote-unescape')(?, $working-options))
@@ -185,7 +187,7 @@ declare private function csv:parse-line($line as xs:string, $line-no as xs:integ
     let $filtered as xs:string? := map:get($options, '!line-filter')($line)
     return if (fn:not(fn:contains($line, map:get($options, 'field-delimiter')))) 
       then map:get($options, 'report-error')($line, $line-no, 'No field delimiter found in this line', $options)
-        else if (exists($filtered))
+        else if (fn:exists($filtered))
           then csv:parse-line-recurse(
               map:get($options, '!internal-quote-escape')($filtered), 
               $options) 
@@ -201,18 +203,18 @@ declare private function csv:parse-line-recurse($line as xs:string, $options as 
     
     return       
         (: just a string - quotes  but one or more fields :)
-        if (not(contains($line, $d))) then tokenize($line, $q) 
+        if (fn:not(fn:contains($line, $d))) then tokenize($line, $q) 
         
         (: if it starts with a quote ... :)
-        else if (starts-with($line, $q))                    
+        else if (fn:starts-with($line, $q))                    
         then 
-            let $first-field := substring-before(substring-after($line, $q), $q)
-            let $remainder := substring($line, string-length($first-field) + map:get($options, '!ql'))
+            let $first-field := fn:substring-before(fn:substring-after($line, $q), $q)
+            let $remainder := fn:substring($line, fn:string-length($first-field) + map:get($options, '!ql'))
             return ($first-field, csv:parse-line-recurse($remainder, $options))
         
         (: there is a quote somewhere but it's not first :)                    
         else 
-            let $first-field := substring-before($line, $d)
-            let $remainder := substring($line, string-length($first-field) + map:get($options, '!dl'))
+            let $first-field := fn:substring-before($line, $d)
+            let $remainder := fn:substring($line, fn:string-length($first-field) + map:get($options, '!dl'))
             return ($first-field, csv:parse-line-recurse($remainder, $options))
  };
